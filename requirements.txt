@@ -1,0 +1,19 @@
+# 华南地区植物生态效益自动计算与图表生成器 —— 依赖清单
+#
+# 测试环境：Python 3.12.14 / Windows 11
+# 以下版本为实际运行通过的组合，锁定版本以保证可复现。
+#
+# 关于 Python 版本：
+#   - streamlit 1.66 / pandas 3.0 要求 Python >= 3.11
+#   - 推荐直接使用 Python 3.12（本项目的实测环境）
+#   - 若使用 Python 3.11，numpy 会被 pip 自动解析为 3.11 兼容版本，仍可运行
+#
+# 安装（在项目目录下执行）：
+#   pip install -r requirements.txt
+# 国内网络建议加镜像：
+#   pip install -r requirements.txt -i https://pypi.tuna.tsinghua.edu.cn/simple
+
+streamlit==1.66.0
+pandas==3.0.6
+plotly==7.1.0
+requests==2.34.2
