@@ -91,6 +91,67 @@ st.markdown(
 
       /* 侧边栏说明小字：与主色同系，替代原来的红色 */
       .side-note {color:#4A5F50; font-size:.78rem; line-height:1.5;}
+
+      /* ==============================================================
+         字体回退
+         --------------------------------------------------------------
+         Noto Sans/Serif SC 由 .streamlit/config.toml 的 theme.font
+         从 Google Fonts 加载。若用户网络无法访问 Google（或加载超时），
+         浏览器会退回默认字体（往往是衬线宋体），与设计不符。
+         这里显式给出系统中文字体回退链，保证降级后仍是干净的无衬线/衬线。
+         若字体加载成功，链首即同一字体族，不会产生视觉变化。
+         ============================================================== */
+      html, body,
+      [data-testid="stAppViewContainer"],
+      [data-testid="stSidebar"],
+      [data-testid="stMarkdownContainer"],
+      [data-testid="stWidgetLabel"] {
+          font-family: "Noto Sans SC", "Microsoft YaHei", "PingFang SC",
+                       "Hiragino Sans GB", "Source Han Sans SC",
+                       "WenQuanYi Micro Hei", -apple-system, BlinkMacSystemFont,
+                       "Segoe UI", sans-serif;
+      }
+      h1, h2, h3, h4, [data-testid="stHeading"] {
+          font-family: "Noto Serif SC", "Songti SC", "SimSun",
+                       "Source Han Serif SC", Georgia, serif;
+      }
+
+      /* ==============================================================
+         主题兜底（Theme Fallback）
+         --------------------------------------------------------------
+         侧边栏底色、按钮主色、圆角本应由 .streamlit/config.toml 控制。
+         但在云端部署时，若该隐藏目录未随代码上传（或被平台忽略），
+         Streamlit 会退回默认主题：白底侧栏 + 红色按钮。
+         下面几条规则保证即使主题未生效，界面仍是本项目配色。
+         主题正常生效时，这些值与主题一致，不会改变外观。
+         ============================================================== */
+      [data-testid="stSidebar"],
+      [data-testid="stSidebarUserContent"] {
+          background-color: #F2F0E9;
+      }
+      [data-testid="stAppViewContainer"] {color: #2D3A31;}
+
+      [data-testid^="stBaseButton-primary"] {
+          background-color: #4A5F50 !important;
+          border: 1px solid #4A5F50 !important;
+          color: #FFFFFF !important;
+          border-radius: 9999px !important;
+          transition: background-color .15s ease, border-color .15s ease;
+      }
+      [data-testid^="stBaseButton-primary"]:hover {
+          background-color: #3F513F !important;
+          border-color: #3F513F !important;
+      }
+      [data-testid^="stBaseButton-secondary"] {
+          background-color: transparent !important;
+          color: #2D3A31 !important;
+          border: 1px solid #D9D5C8 !important;
+          border-radius: 9999px !important;
+      }
+      [data-testid^="stBaseButton-secondary"]:hover {
+          border-color: #8C9A84 !important;
+          color: #3F513F !important;
+      }
     </style>
     """,
     unsafe_allow_html=True,
@@ -663,66 +724,43 @@ with tab_ai:
         # 植物清单：直接传逐种明细，ai_report 兼容该结构
         plant_list = detail_df.to_dict("records")
 
-        # 环境变量是否已配置（决定开关的可用性）
-        # 用 getattr 兜底：即使 ai_report 是旧版本/被覆盖而缺少该常量，
-        # 界面也不会崩成 AttributeError，只是回退到默认变量名
+        # ---- 静默判断用哪种方式生成 ----
+        # 配置了 API Key 就调用大模型；没有配置就用本地规则生成。
+        # 界面上不暴露密钥状态、不提供开关，用户只看到最终的分析文字。
+        # （getattr 兜底：即使 ai_report 是旧版本缺少该常量也不会崩）
         key_env = getattr(ai_report, "API_KEY_ENV", "DEEPSEEK_API_KEY")
-        has_key = bool(os.environ.get(key_env, "").strip())
-        if has_key:
-            st.success(f"已检测到环境变量 {key_env}，可在线生成。")
-        else:
-            st.info(
-                f"未设置环境变量 `{key_env}`，将使用离线分析。"
-                "配置方法见下方说明。"
-            )
+        use_api = bool(os.environ.get(key_env, "").strip())
 
-        use_api = st.toggle(
-            "使用 DeepSeek API 生成", value=has_key, disabled=not has_key,
-            help="需先配置环境变量 DEEPSEEK_API_KEY",
+        # 结果按「场景签名」缓存。
+        # Streamlit 每次交互都会重跑整个脚本，若不缓存，用户每拖一次滑块
+        # 就会重复调用一次 API（产生不必要的费用）。
+        sig = (
+            len(plant_list),
+            computed["days"],
+            computed["intensity"],
+            computed["region_factor"],
+            use_api,
         )
-        show_reason = st.checkbox("显示降级原因（便于排查）", value=False)
-
-        # ---- 生成报告 ----
-        # 注意：Streamlit 每次交互都会重新执行整个脚本（含所有 Tab）。
-        # 若在此直接调用 API，用户每拖一次滑块就会产生一次计费请求。
-        # 因此在线模式改为「按钮触发 + 结果按场景签名缓存」：
-        #   * 只有点击按钮才真正请求；
-        #   * 相同场景（植物数/天数/雨强/地区系数/开关）后续重跑直接复用结果。
-        report = None
-        if use_api:
-            sig = (
-                len(plant_list),
-                computed["days"],
-                computed["intensity"],
-                computed["region_factor"],
-                show_reason,
-            )
-            if st.button("生成 AI 报告", type="primary"):
-                with st.spinner("正在调用 DeepSeek…"):
-                    st.session_state["ai_report_cache"] = (
-                        sig,
-                        ai_report.generate_report(
-                            carbon_result, cooling_result, rainwater_result,
-                            plant_list, use_api=True, verbose=show_reason,
-                        ),
-                    )
-            cached = st.session_state.get("ai_report_cache")
-            if cached and cached[0] == sig:
-                report = cached[1]
-            else:
-                st.info(
-                    "点击上方按钮生成在线报告。"
-                    "（仅点击时调用 API，避免每次刷新重复计费）"
+        cached = st.session_state.get("ai_report_cache")
+        if cached and cached[0] == sig:
+            report = cached[1]
+        elif use_api:
+            with st.spinner("正在生成分析报告…"):
+                report = ai_report.generate_report(
+                    carbon_result, cooling_result, rainwater_result,
+                    plant_list, use_api=True,
                 )
+            st.session_state["ai_report_cache"] = (sig, report)
         else:
             report = ai_report.generate_report(
                 carbon_result, cooling_result, rainwater_result,
-                plant_list, use_api=False, verbose=show_reason,
+                plant_list, use_api=False,
             )
+            st.session_state["ai_report_cache"] = (sig, report)
 
-        if report:
-            st.markdown(report)
+        st.markdown(report)
 
+        # 保留提示词折叠框：展示结构化输入与 Prompt 设计，便于评阅
         with st.expander("查看发送给 AI 的提示词"):
             st.code(
                 ai_report.build_prompt(
@@ -731,21 +769,4 @@ with tab_ai:
                 language="text",
             )
 
-        with st.expander("如何配置 DeepSeek API Key"):
-            st.markdown(
-                "**PowerShell（仅当前窗口有效）**\n"
-                "```powershell\n"
-                '$env:DEEPSEEK_API_KEY = "sk-你的key"\n'
-                "```\n"
-                "**PowerShell（永久，需重开终端）**\n"
-                "```powershell\n"
-                '[Environment]::SetEnvironmentVariable("DEEPSEEK_API_KEY", '
-                '"sk-你的key", "User")\n'
-                "```\n"
-                "**CMD**\n"
-                "```bat\n"
-                "set DEEPSEEK_API_KEY=sk-你的key\n"
-                "```\n"
-                "配置后重启 `streamlit run app.py` 生效。"
-            )
 
